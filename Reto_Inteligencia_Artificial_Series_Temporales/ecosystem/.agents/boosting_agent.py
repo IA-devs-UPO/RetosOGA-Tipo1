@@ -6,6 +6,7 @@ import sys
 # Add skills dir to path so we can import the tools
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from skills.data_science_tools import evaluate_custom_loss
+from ai_providers import get_provider_config
 
 boosting_persona = """
 Eres un Agente Especialista en Modelos de Boosting, específicamente GBDT (XGBoost, LightGBM, CatBoost).
@@ -19,9 +20,14 @@ Puedes sugerir soluciones como:
 Usa la herramienta `evaluate_custom_loss` para mostrar al usuario cómo difieren las pérdidas.
 """
 
+
 def get_boosting_agent_config() -> LocalAgentConfig:
+    """Get the boosting agent configuration using the provider factory."""
+    provider_cfg = get_provider_config()
     return LocalAgentConfig(
-        model="models/gemini-2.5-pro",
+        model=provider_cfg.model,
+        api_key=provider_cfg.api_key,
+        base_url=provider_cfg.base_url,
         system_instruction=boosting_persona,
         tools=[evaluate_custom_loss]
     )

@@ -7,6 +7,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '.agents'))
 
 from boosting_agent import get_boosting_agent_config
 from clustering_agent import get_clustering_agent_config
+from ai_providers import get_provider_config
 
 orchestrator_persona = """
 Eres el Orquestador del Reto de Inteligencia Artificial de Series Temporales de OGATHON.
@@ -20,20 +21,24 @@ Analiza la consulta del usuario, decide qué subagente está mejor capacitado pa
 Provee al usuario una respuesta integral consolidando lo que diga tu subagente.
 """
 
-def main():
-    # Asegurar que se definió una API Key
-    if not os.environ.get("GEMINI_API_KEY"):
-        print("Error: GEMINI_API_KEY no está definida. Por favor, obtenla en https://aistudio.google.com/app/api-keys y expórtala.")
-        return
 
-    # Definimos el agente orquestador que tiene permitida la sub-agencia
-    config = LocalAgentConfig(
-        model="models/gemini-2.5-pro",
+def get_orchestrator_config() -> LocalAgentConfig:
+    """Get the orchestrator configuration using the provider factory."""
+    provider_cfg = get_provider_config()
+    return LocalAgentConfig(
+        model=provider_cfg.model,
+        api_key=provider_cfg.api_key,
+        base_url=provider_cfg.base_url,
         system_instruction=orchestrator_persona,
         capabilities=types.CapabilitiesConfig(
             enable_subagents=True,
         )
     )
+
+
+def main():
+    # Obtener configuración del provider (valida env vars)
+    config = get_orchestrator_config()
 
     async def run_orchestrator():
         # Inicializamos el orquestador

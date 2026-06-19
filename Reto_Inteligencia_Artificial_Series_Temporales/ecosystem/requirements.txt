@@ -1,4 +1,6 @@
 google-antigravity
+openai
+python-dotenv
 xgboost
 scikit-learn
 tslearn
