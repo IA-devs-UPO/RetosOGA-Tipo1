@@ -1,0 +1,43 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Python 3 with Google Antigravity SDK (multi-agent orchestration)
+  Libraries: xgboost, scikit-learn, tslearn, pandas, numpy, lightgbm, matplotlib, networkx
+  Architecture: Orchestrator + specialist sub-agents (boosting_agent, clustering_agent)
+  Style: Strict typing, relative imports with sys.path manipulation
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Document agent delegation strategy
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include agent interaction diagrams for complex flows
+    - Document data flow between orchestrator and sub-agents
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    - Follow existing code patterns
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
+
+testing:
+  strict_tdd: false
+  runner: none
+  unit: false
+  integration: false
+  e2e: false
+  coverage: false
+  linter: false
+  type_checker: false
+  formatter: false
+  notes: "No test framework detected. Project is a data science/ML prototype ecosystem."
