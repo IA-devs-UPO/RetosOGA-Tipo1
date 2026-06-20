@@ -1,33 +1,94 @@
-### **Título del Desafío:** Predicción de Demanda Intermitente de Repuestos Críticos para Aerogeneradores
+### **Título del Desafío:** Predicción de Demanda Energética Horaria por Código Postal
 
 #### **1. Contexto del Problema**
 
-Un gran operador de parques eólicos terrestres cuenta con una flota de $N$ aerogeneradores distribuidos geográficamente. El mantenimiento correctivo de estos equipos requiere de componentes altamente especializados (como tarjetas de control del multiplicador, sensores de guiñada y actuadores de paso de pala). Las series temporales de uso de estos componentes son extremadamente esporádicas e intermitentes: hay meses consecutivos con cero solicitudes, interrumpidos ocasionalmente por picos de demanda debido a fallas estructurales por desgaste o tormentas.
+La empresa municipal de energía de Sevilla necesita predecir la demanda energética horaria agregada, expresada en **UNE** (unidad normalizada de energía), para cinco códigos postales urbanos (CP). Se deben generar predicciones horarias para **marzo de 2023** (31 días × 24h − 1h = 743 horas; el 26 de marzo a las 02:00 cambia a CEST, eliminando una hora), con **5 CPs** por hora, totalizando **3.715 predicciones** (743 × 5).
 
-La empresa sufre un dilema: un exceso de almacenamiento de estas piezas inmoviliza millones de euros en inventario, pero la falta de stock ante una falla crítica detiene el aerogenerador, lo que cuesta miles de euros diarios en energía no producida.
+La métrica de evaluación es la **sMAPE** (Symmetric Mean Absolute Percentage Error). Valores competitivos: por debajo del **6%**.
 
-#### **2. Conjunto de Datos Provistos**
+#### **2. Datasets**
 
-Los participantes recibirán las siguientes bases de datos:
+Los 4 archivos están en `dataset/`. El feature temporal común es `fechaHora` en formato ISO 8601 con timezone (`+01:00` CET / `+02:00` CEST).
 
-* `historial_mantenimiento.csv`: Registros semanales de sustitución de piezas de los últimos 5 años por aerogenerador y tipo de componente (con una tasa de observaciones con valor de $0$ superior al 75%).
+---
 
+##### **`dataset/demanda_energia_entrenamiento.csv`** — Variable objetivo (target)
 
-* `climatologia_historica.csv`: Series diarias de velocidad media del viento, ráfagas máximas, humedad relativa, temperatura extrema y número de impactos de rayo registrados por parque eólico.
-* `especificaciones_turbinas.csv`: Identificador del aerogenerador, modelo, fecha de instalación, fabricante del componente crítico y horas totales de operación acumuladas.
+- **Formato**: ancho (wide): una fila por hora, una columna por CP.
+- **Columnas**: `fechaHora`, `cp_41001`, `cp_41003`, `cp_41005`, `cp_41010`, `cp_41020`
+- **Rango temporal**: `2021-01-01T00:00:00+01:00` → `2023-02-28T23:00:00+01:00`
+- **Total**: 18.936 registros horarios
+- **Valores ausentes**: sí — distribución por CP:
 
-#### **3. Objetivo Predictivo y Trampa de la Métrica**
+  | Columna | % ausentes | Valores | Mínimo | Máximo | Media |
+  |---|---|---|---|---|---|
+  | `cp_41001` | 4,1% | 18.158 | 3,80 | 60,49 | 17,54 |
+  | `cp_41003` | 0,6% | 18.831 | 3,98 | 24,35 | 9,44 |
+  | `cp_41005` | 4,0% | 18.178 | 89,70 | 228,27 | 158,18 |
+  | `cp_41010` | 5,9% | 17.824 | 19,72 | 167,26 | 43,13 |
+  | `cp_41020` | 8,0% | 17.425 | 27,95 | 84,49 | 42,78 |
 
-El objetivo es predecir la demanda agregada de cada componente para las próximas 4 semanas en cada parque eólico.
+- **Formato de salida esperado**: mismo esquema ancho (wide) — filas: 743 horas de marzo 2023; columnas: `fechaHora`, `cp_41001` .. `cp_41020`.
 
-* **La trampa del MAE:** El hackatón se evalúa oficialmente mediante el Error Absoluto Medio ($MAE$) debido a su fácil traducción a costes financieros directos. Sin embargo, dado que la mediana de una serie con más del 50% de ceros es exactamente cero, los modelos estándar de Machine Learning (como XGBoost o redes LSTM tradicionales) entrenados por defecto para optimizar el $MAE$ convergerán rápidamente a una predicción plana de cero. Este modelo será inútil para la operación, ya que jamás recomendará reponer stock.
+---
 
+##### **`dataset/cp_descripcion.csv`** — Metadatos estáticos de cada CP
 
-* **Desafío técnico:** Los participantes deberán esquivar esta trampa matemática mediante técnicas como:
-1. Estrategias híbridas de clasificación-regresión (modelando primero la probabilidad de que la demanda sea mayor que cero y, posteriormente, estimando su magnitud).
+| Columna | Descripción |
+|---|---|
+| `CodifoPostal` | Identificador del CP (ej. `cp_41005`) |
+| `Area` | Nombre del barrio o zona |
+| `Descripcion` | Perfil de consumo: tipo de zona (residencial, comercial, mixto, equipamientos críticos) |
+| `NumeroClientes` | Número de clientes conectados en ese CP |
 
+- **Nota**: El nombre de columna `CodifoPostal` contiene una errata (`f` por `g`). Úsalo tal cual.
+- Datos de los 5 CPs:
 
-2. Implementación de funciones de pérdida suavizadas y parametrizadas (como la pérdida Huber o aproximaciones personalizadas).
+  | CP | Zona | Clientes | Perfil |
+  |---|---|---|---|
+  | `cp_41001` | Arenal - Santa Cruz - Alfalfa | 162 | Centro histórico, equipamientos críticos, actividad terciaria |
+  | `cp_41003` | Santa Catalina - San Julián - Feria | 607 | Residencial urbano denso, comercio proximidad |
+  | `cp_41005` | Nervión - La Buhaira - Ciudad Jardín | 7.955 | Mixto residencial-comercial, alta escala de carga |
+  | `cp_41010` | Triana | 2.901 | Barrio consolidado, patrón residencial y servicios |
+  | `cp_41020` | Sevilla Este - Santa Clara - Este-Alcosa | 425 | Periferia expansión, actividad logística/terciaria |
 
+---
 
-3. Uso de agrupamientos (clustering) morfológicos previos mediante distancias elásticas (como DTW o k-Shape) para identificar patrones de fallas comunes antes de entrenar los modelos.
+##### **`dataset/clima.csv`** — Variables meteorológicas horarias
+
+- **Rango temporal**: `2021-01-01T00:00:00+01:00` → `2023-03-31T23:00:00+02:00` **(incluye marzo 2023)**
+- **Total**: 19.679 registros horarios
+- **Estación**: única, representativa y común a todos los CP.
+
+  | Columna | Descripción | Unidad | % ausentes | Mínimo | Máximo | Media |
+  |---|---|---|---|---|---|---|
+  | `lluvia` | Precipitación | mm | 0% | 0,00 | 45,70 | 0,08 |
+  | `temperatura` | Temperatura | °C | 0% | -2,10 | 35,40 | 15,21 |
+  | `humedad` | Humedad relativa | % | 4,1% | 17,00 | 100,00 | 65,38 |
+  | `velocidadViento` | Velocidad del viento | km/h | 0,1% | 1,00 | 77,00 | 14,13 |
+
+- **Valores ausentes**: permitida la imputación (en `humedad` y `velocidadViento`).
+
+---
+
+##### **`dataset/calendario.csv`** — Variables de calendario
+
+- **Rango temporal**: `2021-01-01T00:00:00+01:00` → `2023-03-31T23:00:00+02:00` **(incluye marzo 2023)**
+- **Total**: 19.679 registros horarios
+
+  | Columna | Tipo | Descripción |
+  |---|---|---|
+  | `cest` | `True` / `False` | `True` si el registro está en horario de verano (CEST, UTC+2); `False` en horario estándar (CET, UTC+1) |
+  | `es_festivo_o_domingo` | `True` / `False` | `True` si es festivo nacional/regional o domingo |
+
+---
+
+#### **3. Evaluación**
+
+La métrica oficial es la **sMAPE**:
+
+$$ \text{sMAPE} = \frac{100\%}{n} \sum_{i=1}^{n} \frac{|y_i - \hat{y}_i|}{(|y_i| + |\hat{y}_i|) / 2} $$
+
+- **$n$ = 3.715** (743 horas × 5 CPs)
+- Las predicciones se comparan contra los valores reales observados en marzo de 2023.
+- Gana el equipo con **menor sMAPE**. Umbral competitivo: **< 6%**.

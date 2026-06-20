@@ -11,8 +11,10 @@ Each provider uses the optimal client:
 - Google: google.antigravity.Agent
 - Others: openai.AsyncOpenAI (OpenAI-compatible)
 """
+import inspect
+import json
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Optional, Literal, Callable, Any
 from abc import ABC, abstractmethod
 import os
 
@@ -33,12 +35,78 @@ class ProviderConfig:
     priority: int = 99
 
 
-class BaseAIClient(ABC):
-    """Abstract base for AI clients."""
+def func_to_tool(fn: Callable) -> dict:
+    """Convert a Python function into an OpenAI-compatible tool definition."""
+    sig = inspect.signature(fn)
+    doc = inspect.getdoc(fn) or ""
+    params = {"type": "object", "properties": {}, "required": []}
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+        param_doc, param_type = "", "string"
+        if doc:
+            for line in doc.split("\n"):
+                s = line.strip()
+                if s.startswith(f"{name}:"):
+                    param_doc = s[len(name) + 1:].strip()
+        a = param.annotation
+        if a is str: param_type = "string"
+        elif a in (int, float): param_type = "number"
+        elif a is bool: param_type = "boolean"
+        elif getattr(a, "__origin__", None) is list: param_type = "array"
+        elif getattr(a, "__origin__", None) is dict: param_type = "object"
+        params["properties"][name] = {"type": param_type, "description": param_doc or name}
+        if param.default is inspect.Parameter.empty:
+            params["required"].append(name)
+    return {"type": "function", "function": {"name": fn.__name__, "description": doc.split("\n\n")[0].strip() if doc else "", "parameters": params}}
 
+
+async def run_tool(name: str, args: dict, tools_map: dict[str, Callable]) -> str:
+    fn = tools_map.get(name)
+    if not fn:
+        return json.dumps({"error": f"Unknown tool: {name}"})
+    try:
+        result = await fn(**args) if inspect.iscoroutinefunction(fn) else fn(**args)
+        return json.dumps(result, default=str, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+class BaseAIClient(ABC):
     @abstractmethod
     async def chat(self, messages: list[dict], **kwargs) -> str:
-        """Send chat request and return response text."""
+        pass
+
+    async def chat_with_tools(self, messages: list[dict], tools: list[Callable], max_tool_rounds: int = 10) -> str:
+        tool_defs = [func_to_tool(t) for t in tools]
+        tools_map = {t.__name__: t for t in tools}
+        msgs = list(messages)
+        for _ in range(max_tool_rounds):
+            response = await self._raw_chat(msgs, tools=tool_defs)
+            choice = response.choices[0]
+            msg = choice.message
+            if not msg.tool_calls:
+                return msg.content or ""
+            am = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
+            for tc in msg.tool_calls:
+                am["tool_calls"].append({"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
+            msgs.append(am)
+            for tc in msg.tool_calls:
+                raw = tc.function.arguments
+                try:
+                    args = json.loads(raw)
+                except json.JSONDecodeError:
+                    try:
+                        args = json.loads(raw.replace("'", '"'))
+                    except json.JSONDecodeError:
+                        msgs.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps({"error": f"Invalid JSON: {raw[:200]}"})})
+                        continue
+                result = await run_tool(tc.function.name, args, tools_map)
+                msgs.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+        return msgs[-1]["content"] if msgs else ""
+
+    @abstractmethod
+    async def _raw_chat(self, messages: list[dict], **kwargs) -> Any:
         pass
 
 
@@ -55,19 +123,22 @@ class OpenAIClient(BaseAIClient):
         self._is_openrouter = "openrouter" in config.base_url
 
     async def chat(self, messages: list[dict], **kwargs) -> str:
+        response = await self._raw_chat(messages, **kwargs)
+        return response.choices[0].message.content
+
+    async def _raw_chat(self, messages: list[dict], **kwargs) -> Any:
         extra_headers = None
         if self._is_openrouter:
             extra_headers = {
                 "HTTP-Referer": "https://github.com/ogathon/retos-oga",
                 "X-Title": "OGA Series Temporales",
             }
-        response = await self._client.chat.completions.create(
+        return await self._client.chat.completions.create(
             model=self._model,
             messages=messages,
             extra_headers=extra_headers,
             **{"max_tokens": 4096, **kwargs},
         )
-        return response.choices[0].message.content
 
 
 def get_available_provider() -> Optional[ProviderConfig]:
@@ -175,6 +246,11 @@ class GoogleAntigravityClient(BaseAIClient):
         async with Agent(config) as agent:
             response = await agent.chat("\n".join(m["content"] for m in user_messages))
             return await response.text()
+
+
+def get_provider_config() -> Optional[ProviderConfig]:
+    """Alias for get_available_provider. Used by sub-agents."""
+    return get_available_provider()
 
 
 def get_provider_info() -> dict:
