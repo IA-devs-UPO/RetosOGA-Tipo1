@@ -28,8 +28,6 @@ Los 4 archivos están en `dataset/`. El feature temporal común es `fechaHora` e
   | `cp_41010` | 5,9% | 17.824 | 19,72 | 167,26 | 43,13 |
   | `cp_41020` | 8,0% | 17.425 | 27,95 | 84,49 | 42,78 |
 
-- **Formato de salida esperado**: mismo esquema ancho (wide) — filas: 743 horas de marzo 2023; columnas: `fechaHora`, `cp_41001` .. `cp_41020`.
-
 ---
 
 ##### **`dataset/cp_descripcion.csv`** — Metadatos estáticos de cada CP
@@ -92,3 +90,31 @@ $$ \text{sMAPE} = \frac{100\%}{n} \sum_{i=1}^{n} \frac{|y_i - \hat{y}_i|}{(|y_i|
 - **$n$ = 3.715** (743 horas × 5 CPs)
 - Las predicciones se comparan contra los valores reales observados en marzo de 2023.
 - Gana el equipo con **menor sMAPE**. Umbral competitivo: **< 6%**.
+
+---
+
+#### **4. Formato de Entrega**
+
+El archivo de resultados debe ser **CSV** con **3.716 filas** (cabecera + 3.715 predicciones).
+
+**Columnas exactas** (mismo orden):
+```
+fechaHora,cp_41001,cp_41003,cp_41005,cp_41010,cp_41020
+```
+
+**Horizonte temporal**: todas las marcas horarias locales de Sevilla (`Europe/Madrid`) desde `2023-03-01T00:00:00+01:00` hasta `2023-03-31T23:00:00+02:00`. No existe la hora `2023-03-26T02:00:00` (cambio a CEST) → **743 registros** de `fechaHora`.
+
+**Reglas**:
+- `cp` debe ser uno de: `cp_41001`, `cp_41003`, `cp_41005`, `cp_41010`, `cp_41020`.
+- **Sin duplicados** por combinación `fechaHora–cp`.
+- **Sin valores** faltantes, infinitos, texto ni negativos.
+- Predicciones en **UNE**, misma escala que el target histórico.
+- El nombre del archivo es libre, extensión `.csv`.
+
+**Ejemplo**:
+
+```
+fechaHora,cp_41001,cp_41003,cp_41005,cp_41010,cp_41020
+2023-03-01T00:00:00+01:00,11.200,4.800,130.125,36.450,40.900
+2023-03-01T01:00:00+01:00,9.750,4.300,121.500,34.210,46.005
+```

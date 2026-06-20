@@ -31,20 +31,24 @@ TARGET_HORIZON = 743  # horas en marzo 2023
 # ============================================================================
 # CARGA DE DATOS
 # ============================================================================
+def parse_fechas(df):
+    """Convierte fechaHora a datetime con timezone Europe/Madrid."""
+    df = df.copy()
+    df["fechaHora"] = pd.to_datetime(df["fechaHora"], utc=True)
+    df["fechaHora"] = df["fechaHora"].dt.tz_convert("Europe/Madrid")
+    return df
+
 def load_data():
     """Carga los 4 datasets y parsea fechas."""
-    demanda = pd.read_csv(
+    demanda = parse_fechas(pd.read_csv(
         os.path.join(DATA_DIR, "demanda_energia_entrenamiento.csv"),
-        parse_dates=["fechaHora"]
-    )
-    clima = pd.read_csv(
+    ))
+    clima = parse_fechas(pd.read_csv(
         os.path.join(DATA_DIR, "clima.csv"),
-        parse_dates=["fechaHora"]
-    )
-    calendario = pd.read_csv(
+    ))
+    calendario = parse_fechas(pd.read_csv(
         os.path.join(DATA_DIR, "calendario.csv"),
-        parse_dates=["fechaHora"]
-    )
+    ))
     cp_desc = pd.read_csv(
         os.path.join(DATA_DIR, "cp_descripcion.csv")
     )
@@ -189,10 +193,15 @@ def train_model_cp(X, y_cp, cp_name, n_trials=30):
                 callbacks=[lgb.early_stopping(30), lgb.log_evaluation(0)]
             )
             preds = model.predict(X_val)
-            # sMAPE
-            denom = (np.abs(y_val) + np.abs(preds)) / 2
-            smape = np.mean(2 * np.abs(y_val - preds) / (np.abs(y_val) + np.abs(preds))) * 100
-            scores.append(smape)
+            y_true = np.asarray(y_val, dtype=float)
+            y_pred = np.asarray(preds, dtype=float)
+            denom = (np.abs(y_true) + np.abs(y_pred)) / 2
+            mask = denom > 0
+            if mask.sum() == 0:
+                scores.append(0.0)
+            else:
+                smape = 100.0 * np.mean(2 * np.abs(y_true[mask] - y_pred[mask]) / denom[mask])
+                scores.append(smape)
         return np.mean(scores)
 
     study = optuna.create_study(direction="minimize", study_name=f"lgb_{cp_name}")
@@ -203,7 +212,7 @@ def train_model_cp(X, y_cp, cp_name, n_trials=30):
     best_params["random_state"] = 42
 
     # Entrenar con todos los datos con los mejores hiperparámetros
-    model = lgb.LGBMRegressor(**best_params, n_estimators=best_params["n_estimators"])
+    model = lgb.LGBMRegressor(**best_params)
     model.fit(X, y_cp)
 
     return model, study.best_value, best_params
@@ -258,7 +267,7 @@ def main():
     results = []
     for cp in CP_COLS:
         print(f"\n  --- {cp} ---")
-        model, best_smape, best_params = train_model_cp(X, Y[cp], cp, n_trials=30)
+        model, best_smape, best_params = train_model_cp(X, Y[cp], cp, n_trials=10)
         models[cp] = model
         results.append({"cp": cp, "best_smape_val": round(best_smape, 3)})
         print(f"  ✓ Mejor sMAPE val: {best_smape:.3f}%")

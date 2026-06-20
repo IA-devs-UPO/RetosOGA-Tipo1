@@ -29,20 +29,24 @@ N_LAGS = [24, 48, 168]
 # ============================================================================
 # CARGA DE DATOS (incluye marzo 2023 para predictores)
 # ============================================================================
+def parse_fechas(df):
+    """Convierte fechaHora a datetime con timezone Europe/Madrid."""
+    df = df.copy()
+    df["fechaHora"] = pd.to_datetime(df["fechaHora"], utc=True)
+    df["fechaHora"] = df["fechaHora"].dt.tz_convert("Europe/Madrid")
+    return df
+
 def load_prediction_data():
     """Carga clima y calendario de marzo 2023 para predecir."""
-    clima = pd.read_csv(
+    clima = parse_fechas(pd.read_csv(
         os.path.join(DATA_DIR, "clima.csv"),
-        parse_dates=["fechaHora"]
-    )
-    calendario = pd.read_csv(
+    ))
+    calendario = parse_fechas(pd.read_csv(
         os.path.join(DATA_DIR, "calendario.csv"),
-        parse_dates=["fechaHora"]
-    )
-    demanda = pd.read_csv(
+    ))
+    demanda = parse_fechas(pd.read_csv(
         os.path.join(DATA_DIR, "demanda_energia_entrenamiento.csv"),
-        parse_dates=["fechaHora"]
-    )
+    ))
     return demanda, clima, calendario
 
 def load_metadata():
@@ -116,9 +120,9 @@ def build_prediction_dataset(demanda, clima, calendario, feature_names):
     Construye el dataset completo (histórico + marzo 2023) con features,
     para poder generar los lags necesarios antes de predecir.
     """
-    # Merge histórico + clima + calendario
-    df_pred = demanda.merge(clima, on="fechaHora", how="left")
-    df_pred = df_pred.merge(calendario, on="fechaHora", how="left")
+    # Empezar desde clima (incluye marzo 2023), merge calendario y demanda
+    df_pred = clima.merge(calendario, on="fechaHora", how="left")
+    df_pred = df_pred.merge(demanda, on="fechaHora", how="left")
     df_pred = df_pred.sort_values("fechaHora").reset_index(drop=True)
 
     # Feature engineering
@@ -130,20 +134,27 @@ def build_prediction_dataset(demanda, clima, calendario, feature_names):
     df_pred = add_rolling_features(df_pred, CP_COLS)
     df_pred = add_clima_lags(df_pred)
 
-    # Filtrar solo marzo 2023
-    mask_marzo = (df_pred["fechaHora"] >= "2023-03-01") & (df_pred["fechaHora"] < "2023-04-01")
+    # Separar marzo 2023 (predicción) y febrero 2023 (validación)
+    mar = pd.Timestamp("2023-03-01", tz="Europe/Madrid")
+    abr = pd.Timestamp("2023-04-01", tz="Europe/Madrid")
+    feb = pd.Timestamp("2023-02-01", tz="Europe/Madrid")
+
+    mask_marzo = (df_pred["fechaHora"] >= mar) & (df_pred["fechaHora"] < abr)
+    mask_feb = (df_pred["fechaHora"] >= feb) & (df_pred["fechaHora"] < mar)
+
     df_marzo = df_pred[mask_marzo].reset_index(drop=True)
+    df_feb = df_pred[mask_feb].reset_index(drop=True)
 
     # Verificar que tenemos todas las features necesarias
     missing_features = [f for f in feature_names if f not in df_marzo.columns]
     if missing_features:
         print(f"  ⚠ Features faltantes: {missing_features}")
-        # Añadirlas con NaN
         for f in missing_features:
             df_marzo[f] = np.nan
 
     X_pred = df_marzo[feature_names]
-    return X_pred, df_marzo
+    X_val = df_feb[feature_names] if len(df_feb) > 0 else None
+    return X_pred, df_marzo, X_val, df_feb
 
 # ============================================================================
 # MÉTRICA sMAPE
@@ -180,10 +191,11 @@ def predict_all_cps(X_pred, df_marzo, metadata):
 # ============================================================================
 # EVALUACIÓN VS REALES
 # ============================================================================
-def evaluate_predictions(predictions, df_marzo):
-    """Evalúa las predicciones contra los valores reales usando sMAPE."""
+def evaluate_predictions(predictions, df_val):
+    """Evalúa las predicciones contra los valores reales usando sMAPE.
+    Usa datos de validación (febrero) donde tenemos ground truth."""
     print("\n" + "-" * 50)
-    print("EVALUACIÓN sMAPE vs VALORES REALES")
+    print("EVALUACIÓN sMAPE vs VALORES REALES (Feb 2023)")
     print("-" * 50)
 
     results = []
@@ -191,7 +203,7 @@ def evaluate_predictions(predictions, df_marzo):
     all_pred = []
 
     for cp in CP_COLS:
-        y_true = df_marzo[cp].values
+        y_true = df_val[cp].values
         y_pred = predictions[cp]
         s = smape(y_true, y_pred)
         results.append({"cp": cp, "sMAPE": round(s, 3)})
@@ -208,10 +220,14 @@ def evaluate_predictions(predictions, df_marzo):
 # ============================================================================
 # GUARDAR PREDICCIONES (formato wide)
 # ============================================================================
-def save_predictions(predictions, df_marzo):
-    """Guarda las predicciones en formato wide (como el CSV de entrada)."""
-    fecha_hora = df_marzo["fechaHora"].values
-    pred_df = pd.DataFrame({"fechaHora": fecha_hora})
+def save_predictions(predictions, df_pred):
+    """Guarda las predicciones en formato wide con ISO 8601 + timezone."""
+    fecha_hora = df_pred["fechaHora"]
+    # Formatear como ISO 8601 con offset: 2023-03-01T00:00:00+01:00
+    fecha_hora_str = fecha_hora.apply(
+        lambda ts: ts.strftime("%Y-%m-%dT%H:%M:%S") + ts.strftime("%z")[:3] + ":" + ts.strftime("%z")[3:]
+    ).tolist()
+    pred_df = pd.DataFrame({"fechaHora": fecha_hora_str})
     for cp in CP_COLS:
         pred_df[cp] = predictions[cp]
 
@@ -250,38 +266,51 @@ def main():
 
     # 2. Construir dataset de predicción
     print("\n[2] Construyendo dataset de predicción (Marzo 2023)...")
-    X_pred, df_marzo = build_prediction_dataset(demanda, clima, calendario, feature_names)
-    print(f"  X_pred: {X_pred.shape}")
+    X_pred, df_marzo, X_val, df_feb = build_prediction_dataset(demanda, clima, calendario, feature_names)
+    print(f"  X_pred (Marzo): {X_pred.shape}")
     print(f"  df_marzo (filas): {len(df_marzo)}")
+    if X_val is not None:
+        print(f"  X_val (Febrero): {X_val.shape}")
+        print(f"  df_feb (filas): {len(df_feb)}")
 
     # Verificar que no haya nulos en X_pred
     nulos = X_pred.isnull().sum().sum()
     if nulos > 0:
-        print(f"  ⚠ {nulos} valores nulos en features — imputando...")
+        print(f"  ⚠ {nulos} valores nulos en features de Marzo — imputando...")
         X_pred = X_pred.ffill().bfill().fillna(0)
         nulos_post = X_pred.isnull().sum().sum()
         print(f"  Nulos tras imputación: {nulos_post}")
 
-    # 3. Predecir
-    print("\n[3] Generando predicciones para cada CP...")
+    # 3. Predecir para Marzo 2023
+    print("\n[3] Generando predicciones para Marzo 2023...")
     predictions, models_loaded = predict_all_cps(X_pred, df_marzo, metadata)
+    print(f"  Total predicciones: {len(predictions[CP_COLS[0]]) * len(CP_COLS)}")
 
-    # 4. Evaluar
-    print("\n[4] Evaluando contra valores reales...")
-    results, overall = evaluate_predictions(predictions, df_marzo)
+    # 4. Evaluar en Febrero 2023 (validación con ground truth)
+    if X_val is not None and len(df_feb) > 0:
+        print("\n[4] Evaluando en Febrero 2023 (validación)...")
+        val_predictions, _ = predict_all_cps(X_val, df_feb, metadata)
+        results, overall = evaluate_predictions(val_predictions, df_feb)
+    else:
+        print("\n[4] Sin datos de validación — saltando evaluación")
+        results = []
+        overall = 0.0
 
-    # 5. Guardar
+    # 5. Guardar predicciones de Marzo
     print("\n[5] Guardando resultados...")
     pred_df = save_predictions(predictions, df_marzo)
-    save_evaluation_results(results, overall)
+    if results:
+        save_evaluation_results(results, overall)
 
     # 6. Resumen final
     print("\n" + "=" * 70)
     print("RESUMEN FINAL:")
-    for r in results:
-        print(f"  {r['cp']}: {r['sMAPE']:.3f}%")
-    print(f"  OVERALL sMAPE: {overall:.3f}%")
-    print(f"  Predicciones totales: {743 * 5}")
+    if results:
+        for r in results:
+            print(f"  {r['cp']} (val Feb): {r['sMAPE']:.3f}%")
+        print(f"  OVERALL sMAPE (Feb): {overall:.3f}%")
+    print(f"  Predicciones Marzo: {743 * 5}")
+    print(f"  Filas en output: {len(pred_df)}")
     print("=" * 70)
     print("¡Proceso completado con éxito!")
 

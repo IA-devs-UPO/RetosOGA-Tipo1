@@ -1,0 +1,26 @@
+{
+  "resultados_por_cp": [
+    {
+      "cp": "cp_41001",
+      "sMAPE": 4.743
+    },
+    {
+      "cp": "cp_41003",
+      "sMAPE": 5.325
+    },
+    {
+      "cp": "cp_41005",
+      "sMAPE": 0.621
+    },
+    {
+      "cp": "cp_41010",
+      "sMAPE": 2.392
+    },
+    {
+      "cp": "cp_41020",
+      "sMAPE": 4.669
+    }
+  ],
+  "overall_smape": 3.55,
+  "total_predicciones": 3715
+}
